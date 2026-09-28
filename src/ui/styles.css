@@ -161,7 +161,7 @@ select { border: 1px solid var(--line); background: var(--card); border-radius: 
 /* 휴대폰 */
 @media (max-width: 767px) {
   input, textarea, select { font-size: 16px; } /* iOS 자동 확대 방지 */
-  .header { gap: 10px; padding: 0 16px; }
+  .header { gap: 10px; padding: 0 16px; backdrop-filter: none; background: var(--bg); } /* backdrop-filter가 있으면 fixed 탭이 헤더 기준으로 붙는다 */
   .header-title { display: none; }
   .tabs { position: fixed; bottom: 0; left: 0; right: 0; z-index: 20; justify-content: space-around; padding: 6px 8px calc(6px + env(safe-area-inset-bottom)); background: var(--bg); border-top: 1px solid var(--line); }
   .tabs a { flex: 1; text-align: center; padding: 8px; }
