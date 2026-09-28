@@ -1,6 +1,7 @@
 import { EditorContent, useEditor } from '@tiptap/react';
 import StarterKit from '@tiptap/starter-kit';
 import { useEffect, useRef } from 'react';
+import { shouldApplyIncoming } from '../editorSync';
 
 interface Props {
   html: string;
@@ -35,10 +36,14 @@ export default function SceneEditor({ html, onChange }: Props) {
   // 씬 이동·화면 전환 직전의 입력도 저장한다
   useEffect(() => () => flush(), []);
 
-  // 다른 기기에서 동기화된 본문을 반영한다(입력 중이 아닐 때만)
+  // 다른 기기에서 동기화된 본문을 반영한다(저장 대기 중인 입력이 없을 때). 커서 위치는 최대한 유지한다.
   useEffect(() => {
-    if (editor && !editor.isFocused && pending.current === null && html !== editor.getHTML()) {
-      editor.commands.setContent(html, { emitUpdate: false });
+    if (!editor || !shouldApplyIncoming(html, editor.getHTML(), pending.current !== null)) return;
+    const { from, to } = editor.state.selection;
+    editor.commands.setContent(html, { emitUpdate: false });
+    if (editor.isFocused) {
+      const max = editor.state.doc.content.size;
+      editor.commands.setTextSelection({ from: Math.min(from, max), to: Math.min(to, max) });
     }
   }, [html, editor]);
 

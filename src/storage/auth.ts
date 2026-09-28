@@ -59,6 +59,12 @@ export class GoogleAuth {
     return this.token !== null && Date.now() < this.expiresAt;
   }
 
+  /** 로그인한 적 없음 / 토큰 유효 / 로그인했지만 토큰 만료 */
+  state(): 'signed-out' | 'active' | 'expired' {
+    if (this.token === null) return 'signed-out';
+    return this.isSignedIn() ? 'active' : 'expired';
+  }
+
   /** 이전에 로그인한 적이 있으면 앱 시작 시 조용히 다시 로그인을 시도한다. */
   wasSignedIn(): boolean {
     return readFlag();

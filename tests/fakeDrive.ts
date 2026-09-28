@@ -39,6 +39,12 @@ export class FakeDrive implements DriveApi {
       .map(([id, f]) => ({ id, name: f.name, modifiedTime: f.modifiedTime }));
   }
 
+  async getFile(fileId: string): Promise<DriveFile> {
+    this.check();
+    const f = this.get(fileId);
+    return { id: fileId, name: f.name, modifiedTime: f.modifiedTime };
+  }
+
   async download(fileId: string): Promise<string> {
     this.check();
     return this.get(fileId).content;

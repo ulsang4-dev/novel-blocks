@@ -4,9 +4,11 @@ import { addNode, updateNode } from '../../src/model/ops';
 import { createNovel } from '../../src/model/templates';
 import type { Novel } from '../../src/model/types';
 import { AuthError } from '../../src/storage/auth';
-import { DriveError } from '../../src/storage/drive';
+import { DriveError, type DriveApi, type DriveFile } from '../../src/storage/drive';
 import { LocalStore } from '../../src/storage/local';
-import { BACKUP_INTERVAL_MS, mainName, MAX_BACKUPS, SyncEngine, type SyncStatus } from '../../src/sync/engine';
+import {
+  BACKUP_INTERVAL_MS, deletedName, mainName, MAX_BACKUPS, SyncEngine, type AuthState, type SyncStatus,
+} from '../../src/sync/engine';
 import { resolveConflict } from '../../src/sync/merge';
 import { FakeDrive } from '../fakeDrive';
 
@@ -14,11 +16,16 @@ let seq = 0;
 const engines: SyncEngine[] = [];
 afterEach(() => engines.splice(0).forEach((e) => e.dispose()));
 
-async function device(drive: FakeDrive, clock = { t: Date.now() }, signedIn = true) {
+async function device(
+  drive: DriveApi,
+  clock = { t: Date.now() },
+  authState: AuthState | (() => AuthState) = 'active',
+  reauth?: () => Promise<void>,
+) {
   const local = await LocalStore.open(`engine-test-${++seq}`);
   const statuses: SyncStatus[] = [];
   const engine = new SyncEngine({
-    local, drive, isSignedIn: () => signedIn,
+    local, drive, auth: typeof authState === 'function' ? authState : () => authState, reauth,
     onStatus: (s) => statuses.push(s), onChanged: () => {}, now: () => clock.t,
   });
   engines.push(engine);
@@ -48,7 +55,7 @@ const remoteNovel = async (drive: FakeDrive, id: string): Promise<Novel> => {
 
 describe('SyncEngine', () => {
   it('로그인 전에는 기기에만 저장 상태', async () => {
-    const d = await device(new FakeDrive(), { t: 0 }, false);
+    const d = await device(new FakeDrive(), { t: 0 }, 'signed-out');
     await d.engine.syncAll();
     expect(d.last()).toBe('local-only');
   });
@@ -103,7 +110,7 @@ describe('SyncEngine', () => {
     const { a, b, id } = await seeded(drive);
     await a.local.tombstone(id);
     await a.engine.syncAll();
-    expect(drive.appFileNames()).toEqual([]);
+    expect(drive.appFileNames()).toEqual([deletedName(id)]); // 삭제는 표시 파일로 남긴다
     await b.engine.syncAll();
     expect(await b.local.getNovel(id)).toBeUndefined();
   });
@@ -170,5 +177,95 @@ describe('SyncEngine', () => {
     drive.failWith = new TypeError('Failed to fetch');
     await a.engine.syncAll();
     expect(a.last()).toBe('offline');
+  });
+});
+
+describe('SyncEngine — 글 유실 회귀 테스트', () => {
+  it('병합으로 기기 사본이 바뀌면 수정 시각이 이전보다 커진다(화면 편집이 병합을 알아챌 수 있게)', async () => {
+    const drive = new FakeDrive();
+    const { a, b, id, s1, s2 } = await seeded(drive);
+    await edit(b.local, id, (n) => updateNode(n, s2, { plot: 'B' }));
+    await b.engine.syncAll();
+    await edit(a.local, id, (n) => updateNode(n, s1, { plot: 'A가 나중에 씀' })); // 로컬이 원격보다 최신
+    const before = (await a.local.getNovel(id))!.updatedAt;
+    await a.engine.syncAll();
+    const after = (await a.local.getNovel(id))!;
+    expect(after.nodes[s2].plot).toBe('B');
+    expect(after.updatedAt).toBeGreaterThan(before);
+  });
+
+  it('오래된 사본에서 삭제해도 다른 기기가 그 뒤에 고친 내용은 지우지 않는다', async () => {
+    const drive = new FakeDrive();
+    const { a, b, id, s1 } = await seeded(drive);
+    await edit(b.local, id, (n) => updateNode(n, s1, { body: '<p>B의 새 글</p>' }));
+    await b.engine.syncAll();
+    await a.local.tombstone(id); // A는 B의 수정을 받기 전에 삭제
+    await a.engine.syncAll();
+    expect(drive.appFileNames()).toContain(mainName(id));
+    expect((await remoteNovel(drive, id)).nodes[s1].body).toBe('<p>B의 새 글</p>');
+    await b.engine.syncAll();
+    expect(await b.local.getNovel(id)).toBeDefined();
+  });
+
+  it('다른 계정(빈 드라이브)으로 바꿔도 기기의 작품을 지우지 않고 올린다', async () => {
+    const { a, id } = await seeded(new FakeDrive());
+    // 같은 기기 저장소를 새 계정의 빈 드라이브와 동기화
+    const otherAccount = new FakeDrive();
+    const engine = new SyncEngine({ local: a.local, drive: otherAccount, auth: () => 'active', onStatus: () => {}, onChanged: () => {} });
+    engines.push(engine);
+    await engine.syncAll();
+    expect(await a.local.getNovel(id)).toBeDefined();
+    expect(otherAccount.appFileNames()).toEqual([mainName(id)]);
+  });
+
+  it('다른 기기가 방금 올린 내용을 모르고 덮어쓰지 않는다', async () => {
+    const drive = new FakeDrive();
+    const { a, b, id, s1, s2 } = await seeded(drive);
+    await edit(a.local, id, (n) => updateNode(n, s1, { plot: 'A' }));
+    await edit(b.local, id, (n) => updateNode(n, s2, { plot: 'B' }));
+    // A가 목록을 읽은 뒤 올리기 직전에 B가 먼저 올리는 상황
+    let raced = false;
+    const racing: DriveApi = {
+      // A가 목록을 읽은 직후, A가 올리기 전에 B가 먼저 올린다
+      listAppFiles: async () => {
+        const list = await drive.listAppFiles();
+        if (!raced) {
+          raced = true;
+          await b.engine.syncAll();
+        }
+        return list;
+      },
+      download: (fileId) => drive.download(fileId),
+      createAppFile: (name, content) => drive.createAppFile(name, content),
+      updateFile: (fileId, content) => drive.updateFile(fileId, content),
+      deleteFile: (fileId) => drive.deleteFile(fileId),
+      ensureFolder: (name) => drive.ensureFolder(name),
+      upsertGoogleDoc: (opts) => drive.upsertGoogleDoc(opts),
+      getFile: (fileId: string): Promise<DriveFile> => drive.getFile(fileId),
+    };
+    const a2 = new SyncEngine({ local: a.local, drive: racing, auth: () => 'active', onStatus: () => {}, onChanged: () => {} });
+    engines.push(a2);
+    await a2.syncAll();
+    await a2.syncAll();
+    await b.engine.syncAll();
+    const remote = await remoteNovel(drive, id);
+    expect(remote.nodes[s1].plot).toBe('A');
+    expect(remote.nodes[s2].plot).toBe('B');
+  });
+
+  it('토큰이 만료되면 조용히 다시 받고, 실패하면 로그인 필요', async () => {
+    const drive = new FakeDrive();
+    let state: AuthState = 'expired';
+    const ok = await device(drive, undefined, () => state, async () => { state = 'active'; });
+    await ok.engine.syncAll();
+    expect(ok.last()).toBe('saved');
+
+    const fail = await device(drive, undefined, 'expired', async () => { throw new AuthError('popup_blocked'); });
+    await fail.engine.syncAll();
+    expect(fail.last()).toBe('needs-login');
+
+    const noReauth = await device(drive, undefined, 'expired');
+    await noReauth.engine.syncAll();
+    expect(noReauth.last()).toBe('needs-login');
   });
 });

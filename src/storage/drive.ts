@@ -12,6 +12,7 @@ export class DriveError extends Error {
 
 export interface DriveApi {
   listAppFiles(): Promise<DriveFile[]>;
+  getFile(fileId: string): Promise<DriveFile>;
   download(fileId: string): Promise<string>;
   createAppFile(name: string, content: string): Promise<DriveFile>;
   updateFile(fileId: string, content: string): Promise<DriveFile>;
@@ -79,6 +80,10 @@ export class DriveHttp implements DriveApi {
       pageToken = body.nextPageToken;
     } while (pageToken);
     return out;
+  }
+
+  async getFile(fileId: string): Promise<DriveFile> {
+    return (await this.call(`${API}/files/${fileId}?fields=${FIELDS}`)).json();
   }
 
   async download(fileId: string): Promise<string> {

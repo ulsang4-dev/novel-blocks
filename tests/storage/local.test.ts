@@ -40,6 +40,30 @@ describe('LocalStore', () => {
     expect(await store.listNovels()).toHaveLength(0);
   });
 
+  it('updateNovel은 저장된 최신본을 읽어 한 트랜잭션 안에서 바꾼다', async () => {
+    const store = await open();
+    const novel = createNovel('원자적', 'blank');
+    await store.putNovel(novel);
+    const merged = updateNode(novel, novel.rootIds[0], { title: '병합본' });
+    await store.putNovel(merged);
+    const result = await store.updateNovel(novel.id, (stored) => updateNode(stored!, novel.rootIds[0], { plot: '입력' }));
+    const saved = (await store.getNovel(novel.id))!;
+    expect(saved).toEqual(result);
+    expect(saved.nodes[novel.rootIds[0]]).toMatchObject({ title: '병합본', plot: '입력' });
+  });
+
+  it('deleteNovelIf는 그 사이 수정됐으면 지우지 않는다', async () => {
+    const store = await open();
+    const novel = createNovel('지우기', 'blank');
+    await store.putNovel(novel);
+    const typed = updateNode(novel, novel.rootIds[0], { plot: '입력' });
+    await store.putNovel(typed);
+    expect(await store.deleteNovelIf(novel.id, novel.updatedAt)).toBe(false);
+    expect(await store.getNovel(novel.id)).toBeDefined();
+    expect(await store.deleteNovelIf(novel.id, typed.updatedAt)).toBe(true);
+    expect(await store.getNovel(novel.id)).toBeUndefined();
+  });
+
   it('casNovel은 그 사이 수정이 있었으면 덮어쓰지 않는다', async () => {
     const store = await open();
     const novel = createNovel('동시', 'blank');

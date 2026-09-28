@@ -39,6 +39,14 @@ describe('DriveHttp', () => {
     expect(init.body).toContain('{"a":1}');
   });
 
+  it('getFile은 파일의 최신 수정 시각을 읽는다', async () => {
+    const fetchMock = vi.fn().mockResolvedValue(json({ id: 'n', name: 'novel-1.json', modifiedTime: 't2' }));
+    vi.stubGlobal('fetch', fetchMock);
+    const file = await new DriveHttp(async () => 't').getFile('n');
+    expect(file.modifiedTime).toBe('t2');
+    expect(fetchMock.mock.calls[0][0]).toContain('/files/n?fields=id,name,modifiedTime');
+  });
+
   it('upsertGoogleDoc은 fileId가 있으면 PATCH로 덮어쓴다', async () => {
     const fetchMock = vi.fn().mockResolvedValue(json({ id: 'doc1' }));
     vi.stubGlobal('fetch', fetchMock);

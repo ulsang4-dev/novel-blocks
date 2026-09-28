@@ -6,6 +6,7 @@ import type { Novel } from '../model/types';
 import { LocalStore } from '../storage/local';
 import { SyncEngine, type SyncStatus } from '../sync/engine';
 import { resolveConflict, type Conflict, type Resolution } from '../sync/merge';
+import { rebaseEdit } from '../sync/rebase';
 import { preferNewer } from './preferNewer';
 import { auth, drive } from './services';
 
@@ -51,7 +52,8 @@ export const useApp = create<AppState>((set, get) => ({
       engine = new SyncEngine({
         local,
         drive,
-        isSignedIn: () => auth?.isSignedIn() ?? false,
+        auth: () => auth?.state() ?? 'signed-out',
+        reauth: () => (auth ? auth.trySilent() : Promise.reject(new Error('no auth'))),
         onStatus: (status, statusDetail) => set({ status, statusDetail }),
         onChanged: () => void get().reload(),
       });
@@ -118,7 +120,11 @@ export const useApp = create<AppState>((set, get) => ({
     }
     if (next === current) return;
     set((s) => ({ novels: { ...s.novels, [id]: next } }));
-    void queueWrite(() => local.putNovel(next));
+    void queueWrite(async () => {
+      // 그 사이 동기화 엔진이 병합본을 저장했으면 그 위에 편집을 다시 얹는다
+      const saved = await local.updateNovel(id, (stored) => rebaseEdit(stored, current, next, fn));
+      if (saved !== next && get().novels[id] === next) set((s) => ({ novels: { ...s.novels, [id]: saved } }));
+    });
     engine.schedule();
   },
 
