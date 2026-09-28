@@ -176,3 +176,8 @@ select { border: 1px solid var(--line); background: var(--card); border-radius: 
   .conflict-grid { grid-template-columns: 1fr; }
   .popover { position: fixed; left: 16px; right: 16px; top: 64px; width: auto; }
 }
+
+/* 색상 라벨 */
+.swatches { display: flex; gap: 6px; padding: 6px 10px; }
+.swatch { width: 22px; height: 22px; padding: 0; border-radius: 50%; border: 1px solid var(--line); }
+.swatch.none { background: var(--card); font-size: 11px; line-height: 1; color: var(--muted); }
